@@ -15,6 +15,9 @@ use std::{
     time::Duration,
 };
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use tao::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
@@ -34,7 +37,29 @@ use tokio::net::TcpListener as HttpListener;
 
 const FRONTEND_URL: &str = "http://127.0.0.1:3000";
 
-fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+#[cfg(windows)]
+fn msgbox(title: &str, msg: &str) {
+    use std::process::Command;
+    let _ = Command::new("powershell")
+        .args(["-NoProfile", "-Command", &format!(
+            "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('{}', '{}', 'OK', 'Error')",
+            msg.replace('\'', "''"), title.replace('\'', "''")
+        )])
+        .spawn();
+}
+
+#[cfg(not(windows))]
+fn msgbox(title: &str, msg: &str) {
+    eprintln!("[{}] {}", title, msg);
+}
+
+fn main() {
+    if let Err(e) = run() {
+        msgbox("Axeane Bridge — Startup Error", &format!("{}", e));
+    }
+}
+
+fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let state = Arc::new(Mutex::new(initial_state()));
 
     std::thread::spawn({
@@ -53,27 +78,35 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     });
 
     let exe_path = std::env::current_exe()?;
-    let exe_dir = exe_path.parent().expect("exe has no parent dir");
+    let exe_dir = exe_path.parent().ok_or("exe has no parent directory")?;
     let frontend_dir = exe_dir.join("frontend");
 
-    println!("Starting Next.js server from: {}", frontend_dir.display());
-    let frontend_process = launch_frontend(&frontend_dir)?;
+    if !frontend_dir.exists() {
+        return Err(format!(
+            "Frontend directory not found: {}\n\nMake sure the 'frontend' folder is next to the .exe file.",
+            frontend_dir.display()
+        ).into());
+    }
 
-    wait_for_frontend();
+    let frontend_process = launch_frontend(&frontend_dir)
+        .map_err(|e| format!(
+            "Failed to start Next.js frontend: {}\n\nMake sure Node.js is installed and 'npm' is in your PATH.\nFrontend dir: {}",
+            e, frontend_dir.display()
+        ))?;
 
-    println!("Axeane frontend is running at {}", FRONTEND_URL);
-    println!("WebSocket bridge   -> ws://127.0.0.1:8085");
-    println!("HTTP API server    -> http://127.0.0.1:8086");
-    println!("Opening native UI window...");
+    let frontend_ready = wait_for_frontend();
+    if !frontend_ready {
+        msgbox(
+            "Axeane Bridge — Warning",
+            "Next.js frontend did not respond in time.\nThe window will open but may show a connection error.\n\nCheck that Node.js is installed correctly.",
+        );
+    }
 
     open_frontend_window(frontend_process);
 
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// WebSocket bridge — bidirectional: reads commands FROM frontend, sends JS TO browser
-// ─────────────────────────────────────────────────────────────────────────────
 async fn spawn_websocket_bridge(state: Arc<Mutex<SharedAppState>>) {
     let listener = TcpListener::bind("127.0.0.1:8085")
         .await
@@ -181,9 +214,6 @@ fn handle_incoming_message(state: &Arc<Mutex<SharedAppState>>, text: &str) {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HTTP server — handles POST /api/import-pdf from the frontend
-// ─────────────────────────────────────────────────────────────────────────────
 async fn spawn_http_server(state: Arc<Mutex<SharedAppState>>) {
     let listener = HttpListener::bind("127.0.0.1:8086")
         .await
@@ -206,6 +236,13 @@ async fn spawn_http_server(state: Arc<Mutex<SharedAppState>>) {
                 if let Some((k, v)) = line.split_once(": ") {
                     headers.insert(k.to_lowercase(), v.to_string());
                 }
+            }
+
+            if request_line.trim().starts_with("OPTIONS") {
+                let _ = stream.write_all(
+                    b"HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nContent-Length: 0\r\n\r\n"
+                ).await;
+                return;
             }
 
             let is_post_pdf = request_line.trim().starts_with("POST /api/import-pdf");
@@ -237,7 +274,6 @@ async fn spawn_http_server(state: Arc<Mutex<SharedAppState>>) {
                                 let s = state.lock().unwrap();
                                 s.llm.clone()
                             };
-
                             match bin::llm_backend::rip_pdf_text_from_bytes(&pdf_bytes) {
                                 Err(e) => cors_json_response(500, &format!(r#"{{"error":"PDF extraction failed: {}"}}"#, e)),
                                 Ok(raw_text) => {
@@ -269,7 +305,7 @@ async fn spawn_http_server(state: Arc<Mutex<SharedAppState>>) {
 fn cors_json_response(status: u16, body: &str) -> String {
     let reason = if status == 200 { "OK" } else if status == 400 { "Bad Request" } else { "Internal Server Error" };
     format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}",
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nContent-Length: {}\r\n\r\n{}",
         status, reason, body.len(), body
     )
 }
@@ -299,19 +335,40 @@ fn extract_pdf_from_multipart(body: &[u8], boundary: &str) -> Option<Vec<u8>> {
 
 fn launch_frontend(frontend_dir: &PathBuf) -> std::io::Result<Child> {
     let script = if frontend_dir.join(".next").exists() { "start" } else { "dev" };
-    Command::new("npm.cmd")
-        .args(["run", script, "--", "--hostname", "127.0.0.1", "--port", "3000"])
-        .current_dir(frontend_dir)
-        .spawn()
+
+    #[cfg(windows)]
+    {
+        Command::new("npm.cmd")
+            .args(["run", script, "--", "--hostname", "127.0.0.1", "--port", "3000"])
+            .current_dir(frontend_dir)
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .spawn()
+            .or_else(|_| {
+                Command::new("npm")
+                    .args(["run", script, "--", "--hostname", "127.0.0.1", "--port", "3000"])
+                    .current_dir(frontend_dir)
+                    .creation_flags(0x08000000)
+                    .spawn()
+            })
+    }
+
+    #[cfg(not(windows))]
+    {
+        Command::new("npm")
+            .args(["run", script, "--", "--hostname", "127.0.0.1", "--port", "3000"])
+            .current_dir(frontend_dir)
+            .spawn()
+    }
 }
 
-fn wait_for_frontend() {
+fn wait_for_frontend() -> bool {
     for _ in 0..60 {
         if StdTcpStream::connect("127.0.0.1:3000").is_ok() {
-            return;
+            return true;
         }
         std::thread::sleep(Duration::from_millis(500));
     }
+    false
 }
 
 fn open_frontend_window(mut frontend_process: Child) {
