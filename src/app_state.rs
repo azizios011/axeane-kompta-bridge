@@ -51,6 +51,7 @@ pub struct SharedAppState {
     pub auto_detect_active: bool,
     pub is_loading: bool,
     pub llm: LlmConfig,
+    pub journal_code: String,
 }
 
 pub fn initial_state() -> SharedAppState {
@@ -84,6 +85,7 @@ pub fn initial_state() -> SharedAppState {
         trigger_injection: false,
         auto_detect_active: false,
         is_loading: false,
+        journal_code: "VT".to_string(),
         llm: LlmConfig {
             provider_name: "DeepSeek".to_string(),
             endpoint_url: "https://api.deepseek.com/v1/chat/completions".to_string(),
