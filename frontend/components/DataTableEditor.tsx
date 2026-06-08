@@ -1,4 +1,6 @@
 import { Dispatch, SetStateAction, useEffect, useRef } from 'react';
+import { invoke } from '@tauri-apps/api/tauri';
+import { listen } from '@tauri-apps/api/event';
 import { Filter, Plus, Rocket, Trash2, Upload } from 'lucide-react';
 import { AppState, createEmptyRow, formatAmount, totalsForRows } from '@/lib/app-state';
 
@@ -8,49 +10,16 @@ interface DataTableEditorProps {
   patchState: (patch: Partial<AppState>) => void;
 }
 
-let ws: WebSocket | null = null;
-function getWs(): WebSocket {
-  if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
-    ws = new WebSocket('ws://127.0.0.1:8085');
-  }
-  return ws;
-}
-
 export default function DataTableEditor({ appState, setAppState, patchState }: DataTableEditorProps) {
   const totals = totalsForRows(appState.csvRows);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (appState.triggerInjection) {
-      try {
-        const socket = getWs();
-        const send = () => socket.send('TRIGGER_INJECTION');
-        if (socket.readyState === WebSocket.OPEN) {
-          send();
-        } else {
-          socket.addEventListener('open', send, { once: true });
-        }
-      } catch (e) {
-        console.error('WS send error:', e);
-      }
-      patchState({ triggerInjection: false });
-    }
-  }, [appState.triggerInjection]);
-
-  useEffect(() => {
-    try {
-      const socket = getWs();
-      const msg = appState.autoDetectActive ? 'START_AUTO_DETECT' : 'STOP_AUTO_DETECT';
-      const send = () => socket.send(msg);
-      if (socket.readyState === WebSocket.OPEN) {
-        send();
-      } else {
-        socket.addEventListener('open', send, { once: true });
-      }
-    } catch (e) {
-      console.error('WS send error:', e);
-    }
-  }, [appState.autoDetectActive]);
+    const unlisten = listen<string>('status-update', (event) => {
+      patchState({ status: event.payload });
+    });
+    return () => { unlisten.then(fn => fn()); };
+  }, []);
 
   const updateRow = (index: number, field: keyof AppState['csvRows'][number], value: string) =>
     setAppState((current) => ({
@@ -69,23 +38,15 @@ export default function DataTableEditor({ appState, setAppState, patchState }: D
     }
     patchState({ isLoading: true, status: `Importing "${file.name}"... Sending to AI parser backend.` });
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const response = await fetch('http://127.0.0.1:8086/api/import-pdf', {
-        method: 'POST',
-        body: formData,
-      });
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
-        throw new Error(err.error || `Backend responded with status ${response.status}`);
-      }
-      const result = await response.json();
-      if (result.rows && Array.isArray(result.rows)) {
+      const arrayBuffer = await file.arrayBuffer();
+      const bytes = Array.from(new Uint8Array(arrayBuffer));
+      const result = await invoke<import('@/lib/app-state').EditableRow[]>('import_pdf', { bytes });
+      if (result && result.length > 0) {
         setAppState((current) => ({
           ...current,
-          csvRows: [...current.csvRows, ...result.rows],
+          csvRows: [...current.csvRows, ...result],
           isLoading: false,
-          status: `Successfully imported ${result.rows.length} rows from "${file.name}".`,
+          status: `Successfully imported ${result.length} rows from "${file.name}".`,
         }));
       } else {
         patchState({ isLoading: false, status: 'PDF imported but no rows were extracted. Check AI Core parameters.' });
@@ -97,18 +58,21 @@ export default function DataTableEditor({ appState, setAppState, patchState }: D
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const toggleAutoDetect = () => {
+  const toggleAutoDetect = async () => {
     if (!appState.autoDetectActive && appState.csvRows.length === 0) {
       patchState({ status: 'Error: Cannot start automation with an empty spreadsheet grid.' });
       return;
     }
-    const nextValue = !appState.autoDetectActive;
-    patchState({
-      autoDetectActive: nextValue,
-      status: nextValue
-        ? 'Automation listener armed. Navigate to your Axeane ledger sheet to begin.'
-        : 'Auto-detection monitoring suspended manually.',
-    });
+    try {
+      if (appState.autoDetectActive) {
+        await invoke('stop_auto_detect');
+      } else {
+        await invoke('start_auto_detect');
+      }
+      patchState({ autoDetectActive: !appState.autoDetectActive });
+    } catch (e) {
+      console.error('Failed to toggle auto-detect:', e);
+    }
   };
 
   return (

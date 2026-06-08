@@ -13,9 +13,8 @@ name = "axeane_sync_workspace"
 path = "src/main.rs"
 
 [dependencies]
-# UI Webview Engine
-tao = "0.16"
-wry = "0.24"
+# Tauri Framework
+tauri = { version = "1", features = ["shell-open"] }
 
 # Async Runtime & Network Drivers
 tokio = { version = "1.0", features = ["full"] }
@@ -31,3 +30,5 @@ serde_json = "1.0"
 # Self-Contained Local Extraction Engine
 pdf-extract = "0.7"
 
+[build-dependencies]
+tauri-build = { version = "1", features = [] }

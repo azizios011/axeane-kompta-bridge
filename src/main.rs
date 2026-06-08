@@ -1,5 +1,3 @@
-#![windows_subsystem = "windows"]
-
 mod app_state;
 mod bin {
     pub mod browser_backend;
@@ -7,23 +5,11 @@ mod bin {
 }
 
 use std::{
-    collections::HashMap,
-    net::TcpStream as StdTcpStream,
-    path::PathBuf,
-    process::{Child, Command},
     sync::{Arc, Mutex},
     time::Duration,
 };
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
-use tao::{
-    event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
-    window::WindowBuilder,
-};
-use wry::webview::WebViewBuilder;
+use tauri::Manager;
 
 use app_state::{initial_state, SharedAppState};
 use bin::browser_backend::{compile_payload_from_state, build_injection_script};
@@ -32,93 +18,111 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::protocol::Message;
 
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpListener as HttpListener;
+// ─────────────────────────────────────────────────────────────────────────────
+// Tauri commands — called from the frontend via invoke()
+// ─────────────────────────────────────────────────────────────────────────────
 
-const FRONTEND_URL: &str = "http://127.0.0.1:3000";
+#[tauri::command]
+async fn import_pdf(
+    bytes: Vec<u8>,
+    state: tauri::State<'_, Arc<Mutex<SharedAppState>>>,
+    app: tauri::AppHandle,
+) -> Result<Vec<app_state::EditableRow>, String> {
+    let llm_config = {
+        let s = state.lock().unwrap();
+        s.llm.clone()
+    };
 
-#[cfg(windows)]
-fn msgbox(title: &str, msg: &str) {
-    use std::process::Command;
-    let _ = Command::new("powershell")
-        .args(["-NoProfile", "-Command", &format!(
-            "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('{}', '{}', 'OK', 'Error')",
-            msg.replace('\'', "''"), title.replace('\'', "''")
-        )])
-        .spawn();
-}
+    let raw_text = bin::llm_backend::rip_pdf_text_from_bytes(&bytes)
+        .map_err(|e| e.to_string())?;
 
-#[cfg(not(windows))]
-fn msgbox(title: &str, msg: &str) {
-    eprintln!("[{}] {}", title, msg);
-}
+    let rows = bin::llm_backend::parse_pdf_via_ai(&raw_text, &llm_config)
+        .await
+        .map_err(|e| format!("LLM parsing failed: {}", e))?;
 
-fn main() {
-    if let Err(e) = run() {
-        msgbox("Axeane Bridge — Startup Error", &format!("{}", e));
-    }
-}
-
-fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let state = Arc::new(Mutex::new(initial_state()));
-
-    std::thread::spawn({
-        let state = state.clone();
-        move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async move {
-                let s1 = state.clone();
-                let s2 = state.clone();
-                tokio::join!(
-                    spawn_websocket_bridge(s1),
-                    spawn_http_server(s2),
-                );
-            });
-        }
-    });
-
-    let exe_path = std::env::current_exe()?;
-    let exe_dir = exe_path.parent().ok_or("exe has no parent directory")?;
-    let frontend_dir = exe_dir.join("frontend");
-
-    if !frontend_dir.exists() {
-        return Err(format!(
-            "Frontend directory not found: {}\n\nMake sure the 'frontend' folder is next to the .exe file.",
-            frontend_dir.display()
-        ).into());
+    let row_count = rows.len();
+    {
+        let mut s = state.lock().unwrap();
+        s.csv_rows.extend(rows.clone());
+        s.status = format!("Imported {} rows from PDF via AI.", row_count);
     }
 
-    let frontend_process = launch_frontend(&frontend_dir)
-        .map_err(|e| format!(
-            "Failed to start Next.js frontend: {}\n\nMake sure Node.js is installed and 'npm' is in your PATH.\nFrontend dir: {}",
-            e, frontend_dir.display()
-        ))?;
-
-    let frontend_ready = wait_for_frontend();
-    if !frontend_ready {
-        msgbox(
-            "Axeane Bridge — Warning",
-            "Next.js frontend did not respond in time.\nThe window will open but may show a connection error.\n\nCheck that Node.js is installed correctly.",
-        );
-    }
-
-    open_frontend_window(frontend_process);
-
-    Ok(())
+    emit_status(&state, &app);
+    Ok(rows)
 }
 
-async fn spawn_websocket_bridge(state: Arc<Mutex<SharedAppState>>) {
+#[tauri::command]
+fn trigger_injection(
+    state: tauri::State<'_, Arc<Mutex<SharedAppState>>>,
+    app: tauri::AppHandle,
+) {
+    let mut s = state.lock().unwrap();
+    if s.csv_rows.is_empty() {
+        s.status = "Error: No rows loaded. Import a PDF first.".to_string();
+    } else {
+        s.trigger_injection = true;
+        s.status = "Injection triggered.".to_string();
+    }
+    emit_status(&state, &app);
+}
+
+#[tauri::command]
+fn start_auto_detect(
+    state: tauri::State<'_, Arc<Mutex<SharedAppState>>>,
+    app: tauri::AppHandle,
+) {
+    let mut s = state.lock().unwrap();
+    s.auto_detect_active = true;
+    s.status = "Auto-detection armed.".to_string();
+    emit_status(&state, &app);
+}
+
+#[tauri::command]
+fn stop_auto_detect(
+    state: tauri::State<'_, Arc<Mutex<SharedAppState>>>,
+    app: tauri::AppHandle,
+) {
+    let mut s = state.lock().unwrap();
+    s.auto_detect_active = false;
+    s.status = "Auto-detection stopped.".to_string();
+    emit_status(&state, &app);
+}
+
+#[tauri::command]
+fn set_journal(
+    code: String,
+    state: tauri::State<'_, Arc<Mutex<SharedAppState>>>,
+    app: tauri::AppHandle,
+) {
+    let mut s = state.lock().unwrap();
+    s.journal_code = code.trim().to_string();
+    s.status = format!("Journal set to: {}", code.trim());
+    emit_status(&state, &app);
+}
+
+fn emit_status(state: &Arc<Mutex<SharedAppState>>, app: &tauri::AppHandle) {
+    let status = { state.lock().unwrap().status.clone() };
+    let _ = app.emit_all("status-update", &status);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WebSocket bridge — background task for browser extension communication
+// ─────────────────────────────────────────────────────────────────────────────
+
+async fn spawn_websocket_bridge(state: Arc<Mutex<SharedAppState>>, app: tauri::AppHandle) {
     let listener = TcpListener::bind("127.0.0.1:8085")
         .await
         .expect("failed to bind WebSocket bridge on 127.0.0.1:8085");
 
     while let Ok((stream, _)) = listener.accept().await {
         let state = state.clone();
+        let app = app.clone();
         tokio::spawn(async move {
             if let Ok(mut ws) = accept_async(stream).await {
                 {
                     let mut s = state.lock().unwrap();
                     s.status = "Browser extension paired via WebSocket.".to_string();
+                    emit_status(&state, &app);
                 }
 
                 loop {
@@ -133,6 +137,7 @@ async fn spawn_websocket_bridge(state: Arc<Mutex<SharedAppState>>) {
                                 {
                                     let mut s = state.lock().unwrap();
                                     s.status = "Scanning browser DOM for Axeane elements...".to_string();
+                                    emit_status(&state, &app);
                                 }
                                 let script = bin::browser_backend::compile_page_detection_script();
                                 let _ = ws.send(Message::Text(format!("EVAL_REQUEST:{}", script))).await;
@@ -144,6 +149,7 @@ async fn spawn_websocket_bridge(state: Arc<Mutex<SharedAppState>>) {
                                     let mut s = state.lock().unwrap();
                                     s.status = "Warning: No rows to inject. Import a PDF first.".to_string();
                                     s.trigger_injection = false;
+                                    emit_status(&state, &app);
                                     continue;
                                 }
                                 let journal = { let s = state.lock().unwrap(); s.journal_code.clone() };
@@ -153,6 +159,7 @@ async fn spawn_websocket_bridge(state: Arc<Mutex<SharedAppState>>) {
                                     let mut s = state.lock().unwrap();
                                     s.trigger_injection = false;
                                     s.status = "Injection dispatched to browser.".to_string();
+                                    emit_status(&state, &app);
                                 }
                             }
                         }
@@ -160,7 +167,7 @@ async fn spawn_websocket_bridge(state: Arc<Mutex<SharedAppState>>) {
                         msg = ws.next() => {
                             match msg {
                                 Some(Ok(Message::Text(text))) => {
-                                    handle_incoming_message(&state, &text);
+                                    handle_incoming_message(&state, &app, &text);
                                 }
                                 Some(Ok(Message::Close(_))) | None => break,
                                 _ => {}
@@ -171,12 +178,17 @@ async fn spawn_websocket_bridge(state: Arc<Mutex<SharedAppState>>) {
 
                 let mut s = state.lock().unwrap();
                 s.status = "Browser extension disconnected.".to_string();
+                emit_status(&state, &app);
             }
         });
     }
 }
 
-fn handle_incoming_message(state: &Arc<Mutex<SharedAppState>>, text: &str) {
+fn handle_incoming_message(
+    state: &Arc<Mutex<SharedAppState>>,
+    app: &tauri::AppHandle,
+    text: &str,
+) {
     if text == "TRIGGER_INJECTION" {
         let mut s = state.lock().unwrap();
         if s.csv_rows.is_empty() {
@@ -185,18 +197,22 @@ fn handle_incoming_message(state: &Arc<Mutex<SharedAppState>>, text: &str) {
             s.trigger_injection = true;
             s.status = "Injection triggered by browser extension.".to_string();
         }
+        emit_status(state, app);
     } else if text == "START_AUTO_DETECT" {
         let mut s = state.lock().unwrap();
         s.auto_detect_active = true;
         s.status = "Auto-detection armed.".to_string();
+        emit_status(state, app);
     } else if let Some(code) = text.strip_prefix("SET_JOURNAL:") {
         let mut s = state.lock().unwrap();
         s.journal_code = code.trim().to_string();
         s.status = format!("Journal set to: {}", code.trim());
+        emit_status(state, app);
     } else if text == "STOP_AUTO_DETECT" {
         let mut s = state.lock().unwrap();
         s.auto_detect_active = false;
         s.status = "Auto-detection stopped.".to_string();
+        emit_status(state, app);
     } else if text.starts_with("EVAL_RESULT:") {
         let result = &text["EVAL_RESULT:".len()..];
         let mut s = state.lock().unwrap();
@@ -211,186 +227,34 @@ fn handle_incoming_message(state: &Arc<Mutex<SharedAppState>>, text: &str) {
         } else if result == "NO_FORM" {
             s.status = "Form not found on current page.".to_string();
         }
+        emit_status(state, app);
     }
 }
 
-async fn spawn_http_server(state: Arc<Mutex<SharedAppState>>) {
-    let listener = HttpListener::bind("127.0.0.1:8086")
-        .await
-        .expect("failed to bind HTTP server on 127.0.0.1:8086");
+// ─────────────────────────────────────────────────────────────────────────────
+// Entry point
+// ─────────────────────────────────────────────────────────────────────────────
 
-    while let Ok((mut stream, _)) = listener.accept().await {
-        let state = state.clone();
-        tokio::spawn(async move {
-            let mut reader = BufReader::new(&mut stream);
+fn main() {
+    let state = Arc::new(Mutex::new(initial_state()));
+    let state_clone = state.clone();
 
-            let mut request_line = String::new();
-            let _ = reader.read_line(&mut request_line).await;
-
-            let mut headers = HashMap::new();
-            loop {
-                let mut line = String::new();
-                let _ = reader.read_line(&mut line).await;
-                let line = line.trim().to_string();
-                if line.is_empty() { break; }
-                if let Some((k, v)) = line.split_once(": ") {
-                    headers.insert(k.to_lowercase(), v.to_string());
-                }
-            }
-
-            if request_line.trim().starts_with("OPTIONS") {
-                let _ = stream.write_all(
-                    b"HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nContent-Length: 0\r\n\r\n"
-                ).await;
-                return;
-            }
-
-            let is_post_pdf = request_line.trim().starts_with("POST /api/import-pdf");
-            if !is_post_pdf {
-                let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n").await;
-                return;
-            }
-
-            let content_length: usize = headers
-                .get("content-length")
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0);
-
-            let mut body = vec![0u8; content_length];
-            let _ = reader.read_exact(&mut body).await;
-
-            let boundary = headers
-                .get("content-type")
-                .and_then(|ct| ct.split("boundary=").nth(1))
-                .map(|b| b.trim().to_string());
-
-            let response = match boundary {
-                None => cors_json_response(400, r#"{"error":"Missing multipart boundary"}"#),
-                Some(boundary) => {
-                    match extract_pdf_from_multipart(&body, &boundary) {
-                        None => cors_json_response(400, r#"{"error":"Could not extract PDF from form data"}"#),
-                        Some(pdf_bytes) => {
-                            let llm_config = {
-                                let s = state.lock().unwrap();
-                                s.llm.clone()
-                            };
-                            match bin::llm_backend::rip_pdf_text_from_bytes(&pdf_bytes) {
-                                Err(e) => cors_json_response(500, &format!(r#"{{"error":"PDF extraction failed: {}"}}"#, e)),
-                                Ok(raw_text) => {
-                                    match bin::llm_backend::parse_pdf_via_ai(&raw_text, &llm_config).await {
-                                        Err(e) => cors_json_response(500, &format!(r#"{{"error":"LLM parsing failed: {}"}}"#, e)),
-                                        Ok(rows) => {
-                                            let row_count = rows.len();
-                                            {
-                                                let mut s = state.lock().unwrap();
-                                                s.csv_rows.extend(rows.clone());
-                                                s.status = format!("Imported {} rows from PDF via AI.", row_count);
-                                            }
-                                            let rows_json = serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string());
-                                            cors_json_response(200, &format!(r#"{{"rows":{}}}"#, rows_json))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            };
-
-            let _ = stream.write_all(response.as_bytes()).await;
-        });
-    }
-}
-
-fn cors_json_response(status: u16, body: &str) -> String {
-    let reason = if status == 200 { "OK" } else if status == 400 { "Bad Request" } else { "Internal Server Error" };
-    format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nContent-Length: {}\r\n\r\n{}",
-        status, reason, body.len(), body
-    )
-}
-
-fn extract_pdf_from_multipart(body: &[u8], boundary: &str) -> Option<Vec<u8>> {
-    let delimiter = format!("--{}", boundary).into_bytes();
-    let header_end = b"\r\n\r\n";
-
-    let start = body.windows(delimiter.len())
-        .position(|w| w == delimiter.as_slice())?;
-    let after_boundary = start + delimiter.len() + 2;
-
-    let header_end_pos = body[after_boundary..]
-        .windows(header_end.len())
-        .position(|w| w == header_end)?;
-    let data_start = after_boundary + header_end_pos + header_end.len();
-
-    let closing = format!("\r\n--{}--", boundary).into_bytes();
-    let data_end = body[data_start..]
-        .windows(closing.len())
-        .position(|w| w == closing.as_slice())
-        .map(|p| data_start + p)
-        .unwrap_or(body.len());
-
-    Some(body[data_start..data_end].to_vec())
-}
-
-fn launch_frontend(frontend_dir: &PathBuf) -> std::io::Result<Child> {
-    let script = if frontend_dir.join(".next").exists() { "start" } else { "dev" };
-
-    #[cfg(windows)]
-    {
-        Command::new("npm.cmd")
-            .args(["run", script, "--", "--hostname", "127.0.0.1", "--port", "3000"])
-            .current_dir(frontend_dir)
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .spawn()
-            .or_else(|_| {
-                Command::new("npm")
-                    .args(["run", script, "--", "--hostname", "127.0.0.1", "--port", "3000"])
-                    .current_dir(frontend_dir)
-                    .creation_flags(0x08000000)
-                    .spawn()
-            })
-    }
-
-    #[cfg(not(windows))]
-    {
-        Command::new("npm")
-            .args(["run", script, "--", "--hostname", "127.0.0.1", "--port", "3000"])
-            .current_dir(frontend_dir)
-            .spawn()
-    }
-}
-
-fn wait_for_frontend() -> bool {
-    for _ in 0..60 {
-        if StdTcpStream::connect("127.0.0.1:3000").is_ok() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(500));
-    }
-    false
-}
-
-fn open_frontend_window(mut frontend_process: Child) {
-    let event_loop = EventLoop::new();
-    let window = WindowBuilder::new()
-        .with_title("Axeane Automation Bridge")
-        .with_inner_size(tao::dpi::LogicalSize::new(1024.0, 768.0))
-        .build(&event_loop)
-        .unwrap();
-
-    let _webview = WebViewBuilder::new(window)
-        .unwrap()
-        .with_url(FRONTEND_URL)
-        .unwrap()
-        .build()
-        .unwrap();
-
-    event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Wait;
-        if let Event::WindowEvent { event: WindowEvent::CloseRequested, .. } = event {
-            let _ = frontend_process.kill();
-            *control_flow = ControlFlow::Exit;
-        }
-    });
+    tauri::Builder::default()
+        .manage(state)
+        .setup(move |app| {
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                spawn_websocket_bridge(state_clone, handle).await;
+            });
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            import_pdf,
+            trigger_injection,
+            start_auto_detect,
+            stop_auto_detect,
+            set_journal,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }
