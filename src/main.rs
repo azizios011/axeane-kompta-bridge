@@ -23,7 +23,7 @@ use tao::{
 use wry::webview::WebViewBuilder;
 
 use app_state::{initial_state, SharedAppState};
-use bin::browser_backend::compile_payload_from_state;
+use bin::browser_backend::{compile_payload_from_state, build_injection_script};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
@@ -295,44 +295,6 @@ fn extract_pdf_from_multipart(body: &[u8], boundary: &str) -> Option<Vec<u8>> {
         .unwrap_or(body.len());
 
     Some(body[data_start..data_end].to_vec())
-}
-
-fn build_injection_script(json_payload: &str, journal_code: &str) -> String {
-    let escaped_journal = journal_code.replace('\\', "\\\\").replace('\'', "\\'");
-    format!(
-        r#"(function() {{
-            const payloadData = {};
-            const journalCode = '{}';
-            const form = document.getElementById('ecritureForm');
-            if(!form) {{ alert('Form viewport targets not visible.'); return; }}
-            const $scope = angular.element(form).scope();
-            if($scope) {{
-                let idx = 0;
-                function pushLoop() {{
-                    if(idx >= payloadData.length) return;
-                    const entry = payloadData[idx];
-                    $scope.$apply(function() {{
-                        if(!$scope.ecritureGrouping) $scope.ecritureGrouping = {{}};
-                        $scope.ecritureGrouping.dateOperation = entry.date;
-                        $scope.ecritureGrouping.libelle = "Facture Ref: " + entry.ref;
-                        $scope.ecritureGrouping.codeJournal = journalCode;
-                        if(!$scope.ecritureGrouping.lignes) $scope.ecritureGrouping.lignes = [];
-                        $scope.ecritureGrouping.lignes = entry.lignes.map(l => ({{
-                            compte: l.compte,
-                            libelle: "Facture Ref: " + entry.ref,
-                            montantDebit: l.type === 'debit' ? l.amount : 0,
-                            montantCredit: l.type === 'credit' ? l.amount : 0
-                        }}));
-                    }});
-                    idx++;
-                    setTimeout(pushLoop, 1100);
-                }}
-                pushLoop();
-            }}
-        }})();"#,
-        json_payload,
-        escaped_journal
-    )
 }
 
 fn launch_frontend(frontend_dir: &PathBuf) -> std::io::Result<Child> {
