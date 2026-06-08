@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 mod app_state;
 mod bin {
     pub mod browser_backend;
@@ -43,8 +45,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     });
 
-    let project_root = std::env::current_dir()?;
-    let frontend_dir = project_root.join("frontend");
+let exe_path = std::env::current_exe()?;
+    let exe_dir = exe_path.parent().expect("exe has no parent dir");
+    let frontend_dir = exe_dir.join("frontend");
     
     println!("Starting Next.js server...");
     let frontend_process = launch_frontend(&frontend_dir)?;
