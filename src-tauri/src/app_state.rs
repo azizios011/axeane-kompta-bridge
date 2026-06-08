@@ -30,7 +30,8 @@ pub struct FormatTemplate {
     pub rows: Vec<TemplateRow>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LlmConfig {
     pub provider_name: String,
     pub endpoint_url: String,

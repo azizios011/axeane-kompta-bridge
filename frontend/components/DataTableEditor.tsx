@@ -40,7 +40,7 @@ export default function DataTableEditor({ appState, setAppState, patchState }: D
     try {
       const arrayBuffer = await file.arrayBuffer();
       const bytes = Array.from(new Uint8Array(arrayBuffer));
-      const result = await invoke<import('@/lib/app-state').EditableRow[]>('import_pdf', { bytes });
+      const result = await invoke<import('@/lib/app-state').EditableRow[]>('import_pdf', { bytes, llm: appState.llm });
       if (result && result.length > 0) {
         setAppState((current) => ({
           ...current,

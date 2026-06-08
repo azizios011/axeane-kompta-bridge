@@ -26,13 +26,14 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 #[tauri::command]
 async fn import_pdf(
     bytes: Vec<u8>,
+    llm_config: app_state::LlmConfig,
     state: tauri::State<'_, Arc<Mutex<SharedAppState>>>,
     app: tauri::AppHandle,
 ) -> Result<Vec<app_state::EditableRow>, String> {
-    let llm_config = {
-        let s = state.lock().unwrap();
-        s.llm.clone()
-    };
+    {
+        let mut s = state.lock().unwrap();
+        s.llm = llm_config.clone();
+    }
 
     let raw_text = bin::llm_backend::rip_pdf_text_from_bytes(&bytes)
         .map_err(|e| e.to_string())?;
