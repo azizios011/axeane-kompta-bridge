@@ -5,6 +5,7 @@ mod bin {
 }
 
 use std::{
+    process::Command,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -103,6 +104,50 @@ fn set_journal(
 fn emit_status(state: &Arc<Mutex<SharedAppState>>, app: &tauri::AppHandle) {
     let status = { state.lock().unwrap().status.clone() };
     let _ = app.emit("status-update", &status);
+}
+
+#[tauri::command]
+fn launch_browser(
+    port: String,
+    browser_path: String,
+    incognito: bool,
+    state: tauri::State<'_, Arc<Mutex<SharedAppState>>>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let mut s = state.lock().unwrap();
+    s.port = port.clone();
+    s.browser_path = browser_path.clone();
+    s.incognito = incognito;
+
+    let mut args = vec![
+        format!("--remote-debugging-port={}", s.port),
+        "https://kompta.axeane.com/".to_string(),
+    ];
+    if s.incognito {
+        args.push("--incognito".to_string());
+    }
+
+    let executable = if s.browser_path.is_empty() {
+        "chrome".to_string()
+    } else {
+        s.browser_path.clone()
+    };
+
+    let status = if Command::new(&executable).args(&args).spawn().is_ok() {
+        format!("Browser sub-instance successfully bound to debug port: {}.", s.port)
+    } else if executable == "chrome" {
+        if Command::new("msedge").args(&args).spawn().is_ok() {
+            format!("Browser sub-instance successfully bound to debug port: {}.", s.port)
+        } else {
+            "Failed to launch Chrome or Edge. Try browsing for your browser executable.".to_string()
+        }
+    } else {
+        format!("Failed to launch custom browser: {}", executable)
+    };
+
+    s.status = status.clone();
+    emit_status(&state, &app);
+    Ok(status)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -255,6 +300,7 @@ fn main() {
             start_auto_detect,
             stop_auto_detect,
             set_journal,
+            launch_browser,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

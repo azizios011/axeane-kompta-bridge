@@ -1,8 +1,22 @@
 import { Copy, FolderOpen, Globe, Play, Terminal, Tv } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { AppState } from '@/lib/app-state';
 interface BrowserEngineProps { appState: AppState; patchState: (patch: Partial<AppState>) => void; }
 export default function BrowserEngine({ appState, patchState }: BrowserEngineProps) {
-  const initializeBrowser = () => patchState({ status: `Browser launch requested for ${appState.browserPath || 'chrome'} on debug port ${appState.port}. Rust subprocess launch bridge required for native execution.` });
+  const initializeBrowser = async () => {
+    patchState({ status: `Launching ${appState.browserPath || 'chrome'} on debug port ${appState.port}...` });
+    try {
+      const result = await invoke<string>('launch_browser', {
+        port: appState.port,
+        browserPath: appState.browserPath,
+        incognito: appState.incognito,
+      });
+      patchState({ status: result });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      patchState({ status: `Browser launch failed: ${message}` });
+    }
+  };
   return <div className="flex-1 w-full h-full flex flex-col relative bg-background overflow-y-auto pb-xl p-lg animate-fade-in z-10"><div className="grid grid-cols-12 gap-lg max-w-container-max mx-auto w-full"><div className="col-span-12 mb-md"><h2 className="text-display-lg font-display-lg text-on-surface">Browser Engine</h2></div><section className="col-span-12 lg:col-span-5 flex flex-col gap-lg"><div className="bg-surface-container border border-outline-variant p-lg rounded-lg shadow-sm"><div className="flex items-center gap-sm mb-lg border-b border-outline-variant pb-md"><Tv className="text-primary w-6 h-6" /><h3 className="text-headline-md font-headline-md">Remote Proxy Interface Settings</h3></div><div className="space-y-lg"><label className="block"><span className="font-label-md text-label-md text-on-surface-variant mb-sm block">Debugging Subprocess Pipeline Socket Port</span><input value={appState.port} onChange={(event) => patchState({ port: event.target.value })} className="w-full bg-surface-container-lowest border border-outline-variant text-on-surface font-label-md p-md rounded outline-none" type="text" /></label><label className="block"> 
   <span className="font-label-md text-label-md text-on-surface-variant mb-sm block">Browser Executable Path</span> 
   <div className="flex gap-sm"> 
