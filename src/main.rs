@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use tauri::Manager;
+use tauri::Emitter;
 
 use app_state::{initial_state, SharedAppState};
 use bin::browser_backend::{compile_payload_from_state, build_injection_script};
@@ -102,7 +102,7 @@ fn set_journal(
 
 fn emit_status(state: &Arc<Mutex<SharedAppState>>, app: &tauri::AppHandle) {
     let status = { state.lock().unwrap().status.clone() };
-    let _ = app.emit_all("status-update", &status);
+    let _ = app.emit("status-update", &status);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
