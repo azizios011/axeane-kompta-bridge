@@ -25,7 +25,6 @@ pub struct TemplateRow {
 
 #[derive(Debug, Clone)]
 pub struct FormatTemplate {
-    pub id: Option<i32>,
     pub client_key: String,
     pub rows: Vec<TemplateRow>,
 }
@@ -50,7 +49,6 @@ pub struct SharedAppState {
     pub status: String,
     pub trigger_injection: bool,
     pub auto_detect_active: bool,
-    pub is_loading: bool,
     pub llm: LlmConfig,
     pub journal_code: String,
 }
@@ -59,7 +57,6 @@ pub fn initial_state() -> SharedAppState {
     SharedAppState {
         csv_rows: Vec::new(),
         templates: vec![FormatTemplate {
-            id: Some(1),
             client_key: "PASSAGER".to_string(),
             rows: vec![
                 TemplateRow {
@@ -85,7 +82,6 @@ pub fn initial_state() -> SharedAppState {
         status: "System online. Configure parameters within AI Core tab before parsing document.pdf.".to_string(),
         trigger_injection: false,
         auto_detect_active: false,
-        is_loading: false,
         journal_code: "VT".to_string(),
         llm: LlmConfig {
             provider_name: "DeepSeek".to_string(),

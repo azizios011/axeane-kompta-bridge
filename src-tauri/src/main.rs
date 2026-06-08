@@ -35,6 +35,11 @@ async fn import_pdf(
         s.llm = llm_config.clone();
     }
 
+    {
+        let s = state.lock().unwrap();
+        let _ = app.emit("status-update", format!("Debug: starting import_pdf with provider='{}' endpoint='{}' api_key_set={}", s.llm.provider_name, s.llm.endpoint_url, !s.llm.api_key.is_empty()));
+    }
+
     let raw_text = bin::llm_backend::rip_pdf_text_from_bytes(&bytes)
         .map_err(|e| e.to_string())?;
 
@@ -48,9 +53,56 @@ async fn import_pdf(
         s.csv_rows.extend(rows.clone());
         s.status = format!("Imported {} rows from PDF via AI.", row_count);
     }
-
     emit_status(&state, &app);
+    let _ = app.emit("status-update", format!("Debug: import_pdf completed, rows_imported={}", row_count));
     Ok(rows)
+}
+
+#[tauri::command]
+async fn debug_llm(
+    llm_config: app_state::LlmConfig,
+    state: tauri::State<'_, Arc<Mutex<SharedAppState>>>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    {
+        let mut s = state.lock().unwrap();
+        s.llm = llm_config.clone();
+        s.status = format!("Debug: received LLM config (provider: {}, endpoint: {}, api_key_set: {})", s.llm.provider_name, s.llm.endpoint_url, !s.llm.api_key.is_empty());
+    }
+    emit_status(&state, &app);
+
+    // Basic validations
+    {
+        let s = state.lock().unwrap();
+        if s.llm.api_key.is_empty() {
+            return Err("LLM API key is empty on backend".into());
+        }
+    }
+
+    // Probe endpoint with a quick HEAD request (may fail if endpoint doesn't accept HEAD)
+    let probe_result = match reqwest::Client::builder().timeout(Duration::from_secs(5)).build() {
+        Ok(client) => client.head(&llm_config.endpoint_url).bearer_auth(&llm_config.api_key).send().await,
+        Err(e) => return Err(format!("Failed building HTTP client: {}", e).into()),
+    };
+
+    match probe_result {
+        Ok(resp) => {
+            let status = resp.status();
+            {
+                let mut s = state.lock().unwrap();
+                s.status = format!("Debug probe result: HTTP {}", status);
+            }
+            emit_status(&state, &app);
+            Ok(format!("Probe HTTP {}", status))
+        }
+        Err(e) => {
+            let msg = format!("Debug probe failed: {}", e);
+            let mut s = state.lock().unwrap();
+            s.status = msg.clone();
+            emit_status(&state, &app);
+            Err(msg.into())
+        }
+    }
 }
 
 #[tauri::command]
@@ -297,6 +349,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             import_pdf,
+            debug_llm,
             trigger_injection,
             start_auto_detect,
             stop_auto_detect,

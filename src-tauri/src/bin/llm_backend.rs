@@ -1,15 +1,9 @@
 use crate::app_state::{EditableRow, LlmConfig};
 use serde_json::Value;
-use std::path::Path;
 
 pub fn rip_pdf_text_from_bytes(bytes: &[u8]) -> Result<String, String> {
     pdf_extract::extract_text_from_mem(bytes)
         .map_err(|e| format!("PDF text extraction failed: {}", e))
-}
-
-pub fn rip_pdf_text<P: AsRef<Path>>(path: P) -> Result<String, String> {
-    pdf_extract::extract_text_from_mem(&std::fs::read(path).map_err(|e| e.to_string())?)
-        .map_err(|e| format!("Static Node Reading Failure: {}", e))
 }
 
 pub async fn parse_pdf_via_ai(

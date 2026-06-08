@@ -40,7 +40,9 @@ export default function DataTableEditor({ appState, setAppState, patchState }: D
     try {
       const arrayBuffer = await file.arrayBuffer();
       const bytes = Array.from(new Uint8Array(arrayBuffer));
+      console.log('Debug: invoking import_pdf', { bytesLength: bytes.length, provider: appState.llm.providerName, endpoint: appState.llm.endpointUrl, apiKeySet: !!appState.llm.apiKey });
       const result = await invoke<import('@/lib/app-state').EditableRow[]>('import_pdf', { bytes, llm: appState.llm });
+      console.log('Debug: import_pdf returned', result?.length);
       if (result && result.length > 0) {
         setAppState((current) => ({
           ...current,
@@ -97,6 +99,24 @@ export default function DataTableEditor({ appState, setAppState, patchState }: D
             className="bg-surface-container-high text-on-surface border border-outline-variant px-md py-sm rounded flex items-center gap-sm font-label-md text-label-md hover:bg-surface-container-highest transition-colors"
           >
             <Plus className="w-[18px] h-[18px]" />Insert Custom Row
+          </button>
+          <button
+            onClick={async () => {
+              try {
+                patchState({ status: 'Running LLM debug check...' });
+                console.log('Debug: invoking debug_llm', { provider: appState.llm.providerName, endpoint: appState.llm.endpointUrl, apiKeySet: !!appState.llm.apiKey });
+                const res = await invoke<string>('debug_llm', { llm: appState.llm });
+                console.log('Debug: debug_llm result', res);
+                patchState({ status: `LLM Check: ${res}` });
+              } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                console.error('LLM check failed', err);
+                patchState({ status: `LLM Check failed: ${message}` });
+              }
+            }}
+            className="bg-surface-container-high text-on-surface border border-outline-variant px-md py-sm rounded flex items-center gap-sm font-label-md text-label-md hover:bg-surface-container-highest transition-colors"
+          >
+            <Plus className="w-[18px] h-[18px]" />Run LLM Check
           </button>
           <button
             onClick={toggleAutoDetect}
