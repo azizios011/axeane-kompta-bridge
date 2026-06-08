@@ -240,6 +240,7 @@ fn main() {
     let state_clone = state.clone();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .setup(move |app| {
             let handle = app.handle().clone();
