@@ -1,0 +1,29 @@
+[package]
+name = "axeane_sync_workspace"
+version = "1.1.0"
+edition = "2021"
+autobins = false
+
+[[bin]]
+name = "axeane_sync_workspace"
+path = "src/main.rs"
+
+[dependencies]
+# UI Framework
+eframe = "0.26"
+egui_extras = "0.26"
+rfd = "0.14"
+
+# Async Runtime & Network Drivers
+tokio = { version = "1.0", features = ["full"] }
+reqwest = { version = "0.11", features = ["json"] }
+tokio-tungstenite = "0.21"
+futures-util = "0.3"
+
+# Logic & Equation Resolvers
+evalexpr = "8.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Self-Contained Local Extraction Engine
+pdf-extract = "0.7"

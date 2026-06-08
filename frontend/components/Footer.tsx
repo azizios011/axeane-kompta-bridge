@@ -1,0 +1,6 @@
+'use client';
+import { Activity } from 'lucide-react';
+interface FooterProps { status: string; }
+export default function Footer({ status }: FooterProps) {
+  return <footer className="bg-surface-container-lowest text-on-surface-variant font-code-sm text-code-sm border-t border-outline-variant flex justify-between items-center px-lg py-xs h-10 shrink-0 relative z-50 w-full overflow-hidden"><div className="flex items-center gap-md min-w-0"><span className="font-label-md text-label-md text-secondary font-bold hidden md:inline-block">Axeane</span><span className="text-outline hidden md:inline-block">|</span><div className="flex items-center gap-sm min-w-0"><span className="flex items-center justify-center w-3 h-3 relative shrink-0"><span className="w-2 h-2 rounded-full bg-secondary absolute"></span><span className="w-2 h-2 rounded-full bg-secondary absolute status-pulse"></span></span><span className="truncate text-outline">System Logs: {status}</span></div></div><div className="flex items-center gap-md md:gap-lg bg-surface-container-lowest pl-4 shrink-0"><span className="text-outline hidden sm:inline-block">Latency: 24ms</span><span className="whitespace-nowrap flex items-center gap-xs"><Activity className="w-3 h-3" />API Status</span></div></footer>;
+}

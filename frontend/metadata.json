@@ -1,0 +1,6 @@
+{
+  "name": "Axeane Automation Sync",
+  "description": "AI-driven data synchronization and formula mapping engine.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
