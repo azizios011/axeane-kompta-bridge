@@ -9,10 +9,6 @@ name = "axeane_sync_workspace"
 path = "src/main.rs"
 
 [dependencies]
-# UI Framework
-eframe = "0.26"
-egui_extras = "0.26"
-rfd = "0.14"
 
 # Async Runtime & Network Drivers
 tokio = { version = "1.0", features = ["full"] }
@@ -27,3 +23,4 @@ serde_json = "1.0"
 
 # Self-Contained Local Extraction Engine
 pdf-extract = "0.7"
+

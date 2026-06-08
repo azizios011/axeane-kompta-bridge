@@ -1,4 +1,4 @@
-use crate::ui::{EditableRow, LlmConfig};
+use crate::app_state::{EditableRow, LlmConfig};
 use serde_json::Value;
 use std::path::Path;
 
@@ -42,3 +42,4 @@ pub async fn parse_pdf_via_ai(raw_text: &str, config: &LlmConfig) -> Result<Vec<
     let parsed_rows: Vec<EditableRow> = serde_json::from_str(raw_content)?;
     Ok(parsed_rows)
 }
+

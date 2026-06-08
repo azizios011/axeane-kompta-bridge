@@ -4,6 +4,7 @@ import { Table, FunctionSquare, Globe, Cpu, RefreshCw, FileText, HelpCircle, Ter
 interface SidebarProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
+  onTriggerSync: () => void;
 }
 
 export default function Sidebar({ activeTab, setActiveTab, onTriggerSync }: SidebarProps) {
@@ -68,5 +69,6 @@ export default function Sidebar({ activeTab, setActiveTab, onTriggerSync }: Side
     </aside>
   );
 }
+
 
 

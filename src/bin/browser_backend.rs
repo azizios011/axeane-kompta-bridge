@@ -1,4 +1,4 @@
-use crate::ui::{EditableRow, FormatTemplate};
+use crate::app_state::{EditableRow, FormatTemplate};
 use evalexpr::ContextWithMutableVariables;
 
 pub fn compile_payload_from_state(rows: &[EditableRow], templates: &[FormatTemplate]) -> String {
@@ -29,7 +29,7 @@ pub fn compile_payload_from_state(rows: &[EditableRow], templates: &[FormatTempl
             
             computed_lignes.push(serde_json::json!({
                 "compte": t_row.compte,
-                "type": if t_row.entry_type == crate::ui::EntryType::Debit { "debit" } else { "credit" },
+                "type": if t_row.entry_type == crate::app_state::EntryType::Debit { "debit" } else { "credit" },
                 "amount": amount
             }));
         }
@@ -67,3 +67,4 @@ pub fn compile_page_detection_script() -> String {
     })();
     "#.to_string()
 }
+
