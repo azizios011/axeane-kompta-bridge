@@ -12,6 +12,13 @@ use std::{
     time::Duration,
 };
 
+use tao::{
+    event::{Event, WindowEvent},
+    event_loop::{ControlFlow, EventLoop},
+    window::WindowBuilder,
+};
+use wry::webview::WebViewBuilder;
+
 use app_state::{initial_state, SharedAppState};
 use bin::browser_backend::compile_payload_from_state;
 use futures_util::SinkExt;
@@ -21,24 +28,35 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 
 const FRONTEND_URL: &str = "http://127.0.0.1:3000";
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let state = Arc::new(Mutex::new(initial_state()));
-    spawn_browser_websocket_bridge(state.clone());
+    
+    std::thread::spawn({
+        let state = state.clone();
+        move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async move {
+                spawn_browser_websocket_bridge(state);
+                let pending: std::future::Pending<()> = std::future::pending();
+                pending.await;
+            });
+        }
+    });
 
     let project_root = std::env::current_dir()?;
     let frontend_dir = project_root.join("frontend");
-    let mut frontend_process = launch_frontend(&frontend_dir)?;
+    
+    println!("Starting Next.js server...");
+    let frontend_process = launch_frontend(&frontend_dir)?;
 
     wait_for_frontend();
-    open_frontend();
-
-    println!("Axeane frontend is running at {FRONTEND_URL}");
+    
+    println!("Axeane frontend is running at {}", FRONTEND_URL);
     println!("Automation WebSocket bridge is listening on 127.0.0.1:8085");
-    println!("Press Ctrl+C to stop the launcher.");
+    println!("Opening native UI Window...");
 
-    tokio::signal::ctrl_c().await?;
-    let _ = frontend_process.kill();
+    open_frontend_window(frontend_process);
+
     Ok(())
 }
 
@@ -161,9 +179,32 @@ fn wait_for_frontend() {
     }
 }
 
-fn open_frontend() {
-    let _ = Command::new("cmd")
-        .args(["/C", "start", "", FRONTEND_URL])
-        .spawn();
+fn open_frontend_window(mut frontend_process: Child) {
+    let event_loop = EventLoop::new();
+    let window = WindowBuilder::new()
+        .with_title("Axeane Automation Bridge")
+        .with_inner_size(tao::dpi::LogicalSize::new(1024.0, 768.0))
+        .build(&event_loop)
+        .unwrap();
+
+    let _webview = WebViewBuilder::new(window)
+        .unwrap()
+        .with_url(FRONTEND_URL)
+        .unwrap()
+        .build()
+        .unwrap();
+
+    event_loop.run(move |event, _, control_flow| {
+        *control_flow = ControlFlow::Wait;
+
+        if let Event::WindowEvent {
+            event: WindowEvent::CloseRequested,
+            ..
+        } = event
+        {
+            let _ = frontend_process.kill();
+            *control_flow = ControlFlow::Exit;
+        }
+    });
 }
 

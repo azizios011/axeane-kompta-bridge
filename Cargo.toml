@@ -9,6 +9,9 @@ name = "axeane_sync_workspace"
 path = "src/main.rs"
 
 [dependencies]
+# UI Webview Engine
+tao = "0.16"
+wry = "0.24"
 
 # Async Runtime & Network Drivers
 tokio = { version = "1.0", features = ["full"] }
