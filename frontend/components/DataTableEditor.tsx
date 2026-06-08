@@ -1,5 +1,5 @@
 import { Dispatch, SetStateAction, useEffect, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
+import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Filter, Plus, Rocket, Trash2, Upload } from 'lucide-react';
 import { AppState, createEmptyRow, formatAmount, totalsForRows } from '@/lib/app-state';
